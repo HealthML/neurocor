@@ -1,0 +1,4 @@
+
+# file specifying the paths to the input sumstats files
+sumstats: "config/input_sumstats.tsv"
+

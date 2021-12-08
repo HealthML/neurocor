@@ -12,10 +12,6 @@ SNAKEMAKE_ENV='snakemake'
 # Initialize conda:
 eval "$(conda shell.bash hook)"
 
-if [ ! -d $snakemake_env ]; then
-    ./install.sh
-fi
-
 conda activate ${SNAKEMAKE_ENV}
 
 snakemake --snakefile workflow/Snakefile \
