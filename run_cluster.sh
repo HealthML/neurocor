@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SNAKEMAKE_ENV='snakemake'
+SNAKEMAKE_ENV=snakemake
 
 #SBATCH --job-name=controljob_%j
 #SBATCH --output=snakemake_%j.log
@@ -11,7 +11,6 @@ SNAKEMAKE_ENV='snakemake'
 
 # Initialize conda:
 eval "$(conda shell.bash hook)"
-
 conda activate ${SNAKEMAKE_ENV}
 
 snakemake --snakefile workflow/Snakefile \

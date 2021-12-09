@@ -1,0 +1,168 @@
+
+import numpy as np
+import pandas as pd
+import os
+
+# load the sample sheet
+sumstats = pd.read_csv(config['sumstats'], sep='\t', index_col='ID', header=0)
+assert 'PATH' in sumstats.columns, 'Error, missing column "PATH" in sumstats sample sheet.'
+assert 'N' in sumstats.columns, 'Error, missing column "N" in sumstats sample sheet.'
+
+# load the big40 metadata
+big40 = pd.read_csv('resources/big40_metadata.tsv.gz', sep='\t')
+big40['idp'] = ['{:04d}'.format(x) for x in big40['Pheno'].values ]
+big40.set_index('idp',drop=False,inplace=True)
+
+# load the big40 phenotypes we wish to analyse
+with open(config['big40_phenotypes'], 'r') as infile:
+    big40_phenotypes = ['{:04d}'.format(int(x.strip())) for x in infile]
+
+rule all:
+    conda:
+        "env/ldsc.yml"
+    output:
+        touch('all.ok')
+    shell:
+        "echo 'one rule to rule them all'"
+
+rule download_hm3_snplist:
+    output:
+        "resources/w_hm3/w_hm3.snplist"
+    shell:
+        "cd resources/w_hm3 && "
+        "wget https://data.broadinstitute.org/alkesgroup/LDSCORE/w_hm3.snplist.bz2 && "
+        "bunzip2 w_hm3.snplist.bz2"
+
+rule download_and_munge_brain_sumstats:
+    input:
+        "resources/w_hm3/w_hm3.snplist"
+    output:
+        ss_tmp=temp("resources/sumstats/big40/{idp}.txt.gz"),
+        ss_munged="resources/sumstats/big40_munged/{idp}.sumstats.gz"
+    params:
+        N=lambda wc: big40.loc[wc['idp'],'N(all)'],
+        out_prefix=lambda wc, output: output['ss_munged'].replace('.sumstats.gz','')
+    conda:
+        "env/ldsc.yml"
+    resources:
+        threads=1,
+        mem_mb=8000,
+        time="02:00:00"
+    shell:
+        "wget --no-verbose -O {output[ss_tmp]} https://open.win.ox.ac.uk/ukbiobank/big40/release2/stats33k/{wildcards[idp]}.txt.gz && "
+        "zcat {output[ss_tmp]} | awk 'BEGIN{{print \"CHR\", \"SNP\", \"POS\", \"A1\", \"A2\", \"BETA\", \"SE\", \"P\"}}{{if(NR>1){{$NF=10**(-1*$NF); print $0}}}}' > {params[out_prefix]}.reformat.tmp.txt && "
+        "python ldsc/munge_sumstats.py --chunksize 500000 --sumstats {params[out_prefix]}.reformat.tmp.txt --N {params[N]} --out {params[out_prefix]} --merge-alleles {input} && "
+        "rm {params[out_prefix]}.reformat.tmp.txt"
+
+
+rule munge_target_sumstats:
+    input:
+        snplist="resources/w_hm3/w_hm3.snplist",
+        ss=lambda wc: sumstats.loc[wc['id'],'PATH']
+    output:
+        ss_munged='results/munged_sumstats/{id}.sumstats.gz'
+    params:
+        out_prefix=lambda wc, output: output['ss_munged'].replace('.sumstats.gz',''),
+        N=lambda wc: sumstats.loc[wc['id'],'N'],
+        pvcol=lambda wc: '--p "{}"'.format(sumstats.loc[wc['id'],'PVAL_COLUMN']) if not sumstats.loc[wc['id'],'PVAL_COLUMN'] == '.' else '',
+        a1col=lambda wc: '--a1 "{}"'.format(sumstats.loc[wc['id'],'A1_COLUMN']) if not sumstats.loc[wc['id'],'A1_COLUMN'] == '.' else '',
+        a2col=lambda wc: '--a2 "{}"'.format(sumstats.loc[wc['id'],'A2_COLUMN']) if not sumstats.loc[wc['id'],'A2_COLUMN'] == '.' else ''
+    conda:
+        "env/ldsc.yml"
+    resources:
+        threads=1,
+        mem_mb=8000,
+        time="02:00:00"
+    shell:
+        "python ldsc/munge_sumstats.py --chunksize 500000 --sumstats {input[ss]} --N {params[N]} --out {params[out_prefix]} --merge-alleles {input[snplist]} {params[pvcol]} {params[a1col]} {params[a2col]}"
+
+
+rule download_ld_scores:
+    output:
+        directory('resources/eur_w_ld_chr')
+    shell:
+        "cd resources && "
+        "wget --no-verbose https://data.broadinstitute.org/alkesgroup/LDSCORE/eur_w_ld_chr.tar.bz2 && "
+        "tar -jxvf eur_w_ld_chr.tar.bz2"
+
+
+# rule to trigger downloading and preprocessing of all requested big40 phenotypes
+rule all_download_and_munge_big40:
+    input:
+        expand(rules.download_and_munge_brain_sumstats.output, idp=big40_phenotypes)
+
+
+# rule to trigger preprocessing of all target sumstats
+rule all_munge_sumstats:
+    input:
+        expand(rules.munge_target_sumstats.output, id=sumstats.index.values)
+
+# make rules above local
+localrules:
+    all_download_and_munge_big40,
+    all_munge_sumstats
+
+
+# chunk the phenotypes into batches
+checkpoint chunk_phenotypes:
+    input:
+        pheno_file=config['big40_phenotypes']
+    output:
+        chunks=directory('results/pheno_chunks')
+    run:
+        os.makedirs(output['chunks'])
+        for i, p in enumerate(big40_phenotypes):
+            outfile='results/pheno_chunks/{}.txt'.format(int(i/100))
+            with open(outfile, 'a+') as out:
+                out.write(p+'\n')
+
+# make rule above local
+localrules:
+    chunk_phenotypes
+
+# input function for rule below
+def input_files_from_chunk(wildcards):
+    with open('results/pheno_chunks/{}.txt'.format(wildcards['i']),'r') as infile:
+        phenos = [ p.strip() for p in infile ]
+    input_files = ['resources/sumstats/big40_munged/{}.sumstats.gz'.format(p) for p in phenos]
+    return input_files
+
+rule genetic_correlation_chunk:
+    input:
+        ss_big40=input_files_from_chunk,
+        ss_target='results/munged_sumstats/{id}.sumstats.gz',
+        ldscores=rules.download_ld_scores.output # this is a directory
+    output:
+        log='results/genetic_correlation_chunk/{id}/{i}.log'
+    params:
+        out_prefix=lambda wc, output: output['log'].replace('.log',''),
+        ss_string=lambda wc, input: input['ss_target'] + ',' + ','.join(input['ss_big40'])
+    conda:
+        'env/ldsc.yml'
+    shell:
+        "python ldsc/ldsc.py "
+        "--ref-ld-chr {input[ldscores]}/ "
+        "--out {params[out_prefix]} "
+        "--rg {params[ss_string]} "
+        "--w-ld-chr {input[ldscores]}/"
+
+# input function for rule below
+def aggregate_input_chunks(wildcards):
+    checkpoint_output = checkpoints.chunk_phenotypes.get(**wildcards).output['chunks']
+
+    # "i" will contain all the chunk numbers
+    i = glob_wildcards(os.path.join(checkpoint_output, '{i}.txt'))[0]
+    print('aggregating {} chunks'.format(len(i)))
+
+    return expand("results/genetic_correlation_chunk/{id}/{i}.log", id=wildcards.id, i=i)
+
+rule aggregate_chunks:
+    input:
+        chunks=aggregate_input_chunks
+    output:
+        touch('results/genetic_correlation_chunk/{id}.ok')
+ 
+rule all_aggregate_chunks:
+    input:
+        expand(rules.aggregate_chunks.output, id=sumstats.index.values)
+

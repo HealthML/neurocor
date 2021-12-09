@@ -2,3 +2,7 @@
 # file specifying the paths to the input sumstats files
 sumstats: "config/input_sumstats.tsv"
 
+# file specifying which big40 phenotypes we want to compare to
+big40_phenotypes: "config/big40_phenotypes.txt"
+
+
