@@ -1,13 +1,13 @@
 #!/bin/bash
 
-SNAKEMAKE_ENV=snakemake
-
 #SBATCH --job-name=controljob_%j
 #SBATCH --output=snakemake_%j.log
-#SBATCH --partition=vcpu
-#SBATCH --time=48:00:00
+#SBATCH --partition=vcpu,hpcpu
+#SBATCH --time=24:00:00
 #SBATCH -c 1
 #SBATCH --mem 2000
+
+SNAKEMAKE_ENV=snakemake
 
 # Initialize conda:
 eval "$(conda shell.bash hook)"
