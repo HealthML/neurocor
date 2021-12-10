@@ -3,6 +3,9 @@ import numpy as np
 import pandas as pd
 import os
 
+from glob import glob
+from io import StringIO
+
 # load the sample sheet
 sumstats = pd.read_csv(config['sumstats'], sep='\t', index_col='ID', header=0)
 assert 'PATH' in sumstats.columns, 'Error, missing column "PATH" in sumstats sample sheet.'
@@ -17,13 +20,22 @@ big40.set_index('idp',drop=False,inplace=True)
 with open(config['big40_phenotypes'], 'r') as infile:
     big40_phenotypes = ['{:04d}'.format(int(x.strip())) for x in infile]
 
+# triggers running all rules
 rule all:
+    input:
+        'results/results.tsv.gz'
+
+#################################
+# dependencies / pre-processing #
+#################################
+
+rule install_ldsc_conda:
     conda:
         "env/ldsc.yml"
     output:
-        touch('all.ok')
+        touch('ldsc_conda.ok')
     shell:
-        "echo 'one rule to rule them all'"
+        "echo 'dummy rule to install ldsc conda environment'"
 
 rule download_hm3_snplist:
     output:
@@ -103,6 +115,10 @@ localrules:
     all_munge_sumstats
 
 
+################
+# running ldsc #
+################
+
 # chunk the phenotypes into batches
 checkpoint chunk_phenotypes:
     input:
@@ -166,3 +182,48 @@ rule all_aggregate_chunks:
     input:
         expand(rules.aggregate_chunks.output, id=sumstats.index.values)
 
+
+#######################
+# merging the results #
+#######################
+
+# function used in the rule below
+def parse_log(path):
+    """
+    parses output of genetic correlation, returns a pandas DataFrame
+    """
+    with open(path, 'r') as infile:
+        keep=False
+        record = ''
+        for line in infile:
+            if line.startswith('Summary of Genetic Correlation'):
+                keep = True
+                continue
+            if not keep:
+                continue
+            if len(line) == 1:
+                break
+            record += line
+    return pd.read_csv(StringIO(record), delim_whitespace=True)
+    
+rule parse_logs:
+    input:
+        rules.all_aggregate_chunks.input,
+        metadata='resources/big40_metadata.tsv.gz'
+    output:
+        results_tsv='results/results.tsv.gz'
+    run:
+        metadata = pd.read_csv(input['metadata'], sep='\t')
+        logs = glob('results/genetic_correlation_chunk/*/*.log')
+        ssid = [ p.split('/')[-2] for p in logs]
+        chunk = [ p.split('/')[-1].split('.')[0] for p in logs ]
+        genet_cor = [ parse_log(x) for x in logs ]
+        for i, _ in enumerate(genet_cor):
+            genet_cor[i]['ss'] = ssid[i]
+            genet_cor[i]['chunk'] = chunk[i]
+        genet_cor = pd.concat(genet_cor)
+        genet_cor['big40_id'] = genet_cor.p2.str.split('/',expand=True)[3].str.split('.',expand=True)[0]
+        metadata['big40_id'] = ['{:04d}'.format(i) for i in metadata.Pheno]
+        genet_cor = genet_cor.merge(metadata[['big40_id','UKB ID','IDP short name','Cat.','Category name','IDP description']], on=['big40_id'], validate='many_to_one').sort_values(p)
+        genet_cor.to_csv(output['results_tsv'], sep='\t')
+        
