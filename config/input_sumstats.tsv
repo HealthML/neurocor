@@ -1,3 +1,2 @@
-ID	PATH
-apc0	resources/sumstats/adni/PC_0.imp.txt
-ipc0	resources/sumstats/imagenet/PC_0.imp.txt
+ID	PATH	N	PVAL_COLUMN	A1_COLUMN	A2_COLUMN
+apc0	resources/sumstats/adni/PC_0.imp.txt	36311	P_BOLT_LMM_INF	ALLELE0	ALLELE1
