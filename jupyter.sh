@@ -10,7 +10,7 @@
 eval "$(conda shell.bash hook)"
  
 if [ "$#" -eq 0 ]; then
-	port=61234
+	port=60000
 else
 	port=$1
 fi
