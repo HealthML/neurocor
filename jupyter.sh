@@ -3,8 +3,8 @@
 #SBATCH --output=jupyter_%j.out
 #SBATCH --partition=hpcpu,vcpu # -p
 #SBATCH --cpus-per-task=1 # -c
-#SBATCH --mem=16gb
-#SBATCH --time=12:00:00 # 5 minutes  
+#SBATCH --mem=6gb
+#SBATCH --time=1:00:00 # 5 minutes  
  
 # Initialize conda:
 eval "$(conda shell.bash hook)"
@@ -19,4 +19,3 @@ fi
 conda activate base
 
 jupyter-lab --port=$port
-i
