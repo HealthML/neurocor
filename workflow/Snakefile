@@ -224,6 +224,6 @@ rule parse_logs:
         genet_cor = pd.concat(genet_cor)
         genet_cor['big40_id'] = genet_cor.p2.str.split('/',expand=True)[3].str.split('.',expand=True)[0]
         metadata['big40_id'] = ['{:04d}'.format(i) for i in metadata.Pheno]
-        genet_cor = genet_cor.merge(metadata[['big40_id','UKB ID','IDP short name','Cat.','Category name','IDP description']], on=['big40_id'], validate='many_to_one').sort_values(p)
+        genet_cor = genet_cor.merge(metadata[['big40_id','UKB ID','IDP short name','Cat.','Category name','IDP description']], on=['big40_id'], validate='many_to_one').sort_values('p')
         genet_cor.to_csv(output['results_tsv'], sep='\t')
         
