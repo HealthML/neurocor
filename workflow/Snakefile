@@ -115,6 +115,59 @@ localrules:
     all_munge_sumstats
 
 
+##########
+# S-LDSC #
+##########
+
+
+rule download_baseline_ld:
+    output:
+        baseline=expand("1000G_EUR_Phase3_baseline/baseline.{chrom}.{suffix}", chrom=range(1,23), suffix=["annot.gz","l2.M", "l2.M_5_50", "l2.ldscore.gz"]),
+        weights=expand("weights_hm3_no_hla/weights.{chrom}.l2.ldscore.gz", chrom=range(1,23)),
+        ok=touch("download_baseline.ok")
+    shell:
+        "wget https://data.broadinstitute.org/alkesgroup/LDSCORE/1000G_Phase3_baseline_ldscores.tgz && "
+        "wget https://data.broadinstitute.org/alkesgroup/LDSCORE/weights_hm3_no_hla.tgz && "
+        "tar -xvzf 1000G_Phase3_baseline_ldscores.tgz && "
+        "tar -xvzf weights_hm3_no_hla.tgz "
+
+
+rule download_ldsc_cts:
+    output:
+        ok=touch("download_{cts_name}.ok"),
+        ldcts="{cts_name}.ldcts"
+    shell:
+        "wget https://data.broadinstitute.org/alkesgroup/LDSCORE/LDSC_SEG_ldscores/{wildcards[cts_name]}_1000Gv3_ldscores.tgz && "
+        "tar -xvzf {wildcards[cts_name]}_1000Gv3_ldscores.tgz "
+
+
+# make rules above local
+localrules:
+    download_ldsc_cts,
+    download_baseline_ld
+
+
+rule run_ldsc_cts:
+    input:
+        sumstats="results/munged_sumstats/{id}.sumstats.gz",
+        ldcts="{cts_name}.ldcts"
+    output:
+        ok=touch('results/ldsc_cts/{id}/{cts_name}.ok')
+    conda:
+        "env/ldsc.yml"
+    resources:
+        threads=1,
+        mem_mb=8000,
+        time="01:00:00"
+    shell:
+        "ldsc/ldsc.py "
+        "--h2-cts {input[sumstats]} "
+        "--ref-ld-chr 1000G_EUR_Phase3_baseline/baseline. "
+        "--out results/ldsc_cts/{wildcards[id]}/{wildcards[cts_name]} "
+        "--ref-ld-chr-cts {input[ldcts]} "
+        "--w-ld-chr weights_hm3_no_hla/weights."
+
+
 ################
 # running ldsc #
 ################
