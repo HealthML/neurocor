@@ -37,3 +37,18 @@ To follow pipeline progress:
 ```
 tail -f snakemake*log
 ```
+
+# S-LDSC enrichment
+
+To run cell-type group analyses with [pre-computed annotations provided by the LDSC authors](https://github.com/bulik/ldsc/wiki/Cell-type-specific-analyses), you can choose one of the available cell type group sets, and request to run the analysis with the following command:
+
+```
+run_cluster.sh results/ldsc_cts/{id}/{ldcts_name}.ok
+```
+
+Where `{id}` should be substituted with the name of the phenotype defined in `config/input_sumstats.tsv` and `{ldcts_name}` is the name of the set of annotations you would like to estimate enrichments for. Available annotation sets are `Multi_tissue_gene_expr`, `Multi_tissue_chromatin`, `GTEx_brain`, `Cahoy`, `ImmGen`, or `Corces_ATAC`. Enrichments are calculated controling for the annotations in the "baseline ld" model using the HapMap3 variants, as defined by the ldsc authors. Please consider their documentation and [accompanying paper](https://www.nature.com/articles/s41588-018-0081-4) for details. 
+
+
+
+
+
