@@ -11,6 +11,9 @@ sumstats = pd.read_csv(config['sumstats'], sep='\t', index_col='ID', header=0)
 assert 'PATH' in sumstats.columns, 'Error, missing column "PATH" in sumstats sample sheet.'
 assert 'N' in sumstats.columns, 'Error, missing column "N" in sumstats sample sheet.'
 
+# load optional other sample sheet
+other_sumstats = pd.read_csv(config['other_sumstats'], sep='\t', index_col='ID', header=0) if 'other_sumstats' in config else pd.DataFrame()
+
 # load the big40 metadata
 big40 = pd.read_csv('resources/big40_metadata.tsv.gz', sep='\t')
 big40['idp'] = ['{:04d}'.format(x) for x in big40['Pheno'].values ]
@@ -89,6 +92,61 @@ rule munge_target_sumstats:
         "python ldsc/munge_sumstats.py --chunksize 500000 --sumstats {input[ss]} --N {params[N]} --out {params[out_prefix]} --merge-alleles {input[snplist]} {params[pvcol]} {params[a1col]} {params[a2col]}"
 
 
+rule harmonize_other_sumstats:
+    input:
+        ss = lambda wc: other_sumstats.loc[wc['id'],'PATH']
+    output:
+        ss_renamed = 'results/other_sumstats/{id}.tsv.gz'
+    params:
+        tmp_prefix = lambda wc: 'results/other_sumstats/{}.tsv'.format(wc['id'])
+    log:
+        'results/other_sumstats/{id}.log'
+    conda:
+        "env/ldsc.yml"
+    resources:
+        threads = 1,
+        mem_mb=64000,
+        time="00:30:00"
+    shell:
+        "("
+        "python workflow/scripts/process_gwas_catalog_sumstats.py -o {params[tmp_prefix]} -i {input} && "
+        "gzip {params[tmp_prefix]} "
+        ") &> {log}"
+
+
+rule all_harmonize_other_sumstats:
+    input:
+        expand(rules.harmonize_other_sumstats.output, id=other_sumstats.index.tolist())
+
+
+rule munge_other_sumstats:
+    input:
+        snplist="resources/w_hm3/w_hm3.snplist",
+        ss='results/other_sumstats/{id}.tsv.gz'
+    output:
+        ss_munged='results/munged_other_sumstats/{id}.sumstats.gz'
+    log:
+        "results/munged_other_sumstats/{id}.snakelog"
+    params:
+        out_prefix=lambda wc, output: output['ss_munged'].replace('.sumstats.gz',''),
+        N=lambda wc: '--N {}'.format(other_sumstats.loc[wc['id'],'N']) if not other_sumstats.loc[wc['id'],'N'] == '.' else ''
+    conda:
+        "env/ldsc.yml"
+    resources:
+        threads=1,
+        mem_mb=8000,
+        time="02:00:00"
+    shell:
+        "("
+        "python ldsc/munge_sumstats.py --chunksize 500000 --sumstats {input[ss]} {params[N]} --out {params[out_prefix]} --merge-alleles {input[snplist]} "
+        ") &> {log}"
+
+
+rule all_munge_other_sumstats:
+    input:
+        expand(rules.munge_other_sumstats.output.ss_munged, id = other_sumstats.index.to_list())
+
+
 rule download_ld_scores:
     output:
         directory('resources/eur_w_ld_chr')
@@ -158,7 +216,7 @@ rule run_ldsc_cts:
     resources:
         threads=1,
         mem_mb=8000,
-        time="01:00:00"
+        time="02:30:00"
     shell:
         "ldsc/ldsc.py "
         "--h2-cts {input[sumstats]} "
@@ -236,11 +294,101 @@ rule all_aggregate_chunks:
         expand(rules.aggregate_chunks.output, id=sumstats.index.values)
 
 
+# genetic correlation of target sumstats with other sumstats
+
+rule genetic_correlation_other:
+    input:
+        ss_other=rules.all_munge_other_sumstats.input,
+        ss_target='results/munged_sumstats/{id}.sumstats.gz',
+        ldscores=rules.download_ld_scores.output # this is a directory
+    output:
+        log='results/genetic_correlation_other/{id}.log'
+    log:
+        'results/genetic_correlation_other/{id}.snakelog'
+    params:
+        out_prefix=lambda wc, output: output['log'].replace('.log',''),
+        ss_string=lambda wc, input: input['ss_target'] + ',' + ','.join(input['ss_other'])
+    conda:
+        'env/ldsc.yml'
+    shell:
+        "("
+        "python ldsc/ldsc.py "
+        "--ref-ld-chr {input[ldscores]}/ "
+        "--out {params[out_prefix]} "
+        "--rg {params[ss_string]} "
+        "--w-ld-chr {input[ldscores]}/"
+        ") &> {log} "
+
+rule all_genetic_correlation_other:
+    input:
+        expand(rules.genetic_correlation_other.output, id = sumstats.index.tolist())
+
+
+# genetic correlation of other sumstats with other sumstats
+
+rule genetic_correlation_within_other:
+    input:
+        ss_other=rules.all_munge_other_sumstats.input,
+        ss_target='results/munged_other_sumstats/{id}.sumstats.gz',
+        ldscores=rules.download_ld_scores.output # this is a directory
+    output:
+        log='results/genetic_correlation_within_other/{id}.log'
+    log:
+        'results/genetic_correlation_within_other/{id}.snakelog'
+    params:
+        out_prefix=lambda wc, output: output['log'].replace('.log',''),
+        ss_string=lambda wc, input: input['ss_target'] + ',' + ','.join(list( s for s in input['ss_other'] if s != input['ss_target']))
+    conda:
+        'env/ldsc.yml'
+    shell:
+        "("
+        "python ldsc/ldsc.py "
+        "--ref-ld-chr {input[ldscores]}/ "
+        "--out {params[out_prefix]} "
+        "--rg {params[ss_string]} "
+        "--w-ld-chr {input[ldscores]}/"
+        ") &> {log} "
+
+rule all_genetic_correlation_within_other:
+    input:
+        expand(rules.genetic_correlation_within_other.output, id = other_sumstats.index.tolist())
+
+
+# genetic correlation of target sumstats with target sumstats
+
+rule genetic_correlation_within_target:
+    input:
+        ss_other=rules.all_munge_sumstats.input,
+        ss_target='results/munged_sumstats/{id}.sumstats.gz',
+        ldscores=rules.download_ld_scores.output # this is a directory
+    output:
+        log='results/genetic_correlation_within_target/{id}.log'
+    log:
+        'results/genetic_correlation_within_target/{id}.snakelog'
+    params:
+        out_prefix=lambda wc, output: output['log'].replace('.log',''),
+        ss_string=lambda wc, input: input['ss_target'] + ',' + ','.join(list( s for s in input['ss_other'] if s != input['ss_target']))
+    conda:
+        'env/ldsc.yml'
+    shell:
+        "("
+        "python ldsc/ldsc.py "
+        "--ref-ld-chr {input[ldscores]}/ "
+        "--out {params[out_prefix]} "
+        "--rg {params[ss_string]} "
+        "--w-ld-chr {input[ldscores]}/"
+        ") &> {log} "
+
+rule all_genetic_correlation_within_target:
+    input:
+        expand(rules.genetic_correlation_within_target.output, id = sumstats.index.tolist())
+
+
 #######################
 # merging the results #
 #######################
 
-# function used in the rule below
+# function used in the rules below
 def parse_log(path):
     """
     parses output of genetic correlation, returns a pandas DataFrame
@@ -279,4 +427,48 @@ rule parse_logs:
         metadata['big40_id'] = ['{:04d}'.format(i) for i in metadata.Pheno]
         genet_cor = genet_cor.merge(metadata[['big40_id','UKB ID','IDP short name','Cat.','Category name','IDP description']], on=['big40_id'], validate='many_to_one').sort_values('p')
         genet_cor.to_csv(output['results_tsv'], sep='\t')
+
+
+rule parse_logs_other:
+    input:
+        logs = rules.all_genetic_correlation_other.input
+    output:
+        results_tsv = 'results/results_other.tsv.gz'
+    run:
+        logs = input['logs']
+        genet_cor = [ parse_log(x) for x in logs ]
+        genet_cor = pd.concat(genet_cor)
+        genet_cor.to_csv(output['results_tsv'], sep='\t', index=False)
+
+localrules:
+    parse_logs_other
         
+
+rule parse_logs_within_other:
+    input:
+        logs = rules.all_genetic_correlation_within_other.input
+    output:
+        results_tsv = 'results/results_within_other.tsv.gz'
+    run:
+        logs = input['logs']
+        genet_cor = [ parse_log(x) for x in logs ]
+        genet_cor = pd.concat(genet_cor)
+        genet_cor.to_csv(output['results_tsv'], sep='\t', index=False)
+
+localrules:
+    parse_logs_within_other
+
+
+rule parse_logs_within_target:
+    input:
+        logs = rules.all_genetic_correlation_within_target.input
+    output:
+        results_tsv = 'results/results_within_target.tsv.gz'
+    run:
+        logs = input['logs']
+        genet_cor = [ parse_log(x) for x in logs ]
+        genet_cor = pd.concat(genet_cor)
+        genet_cor.to_csv(output['results_tsv'], sep='\t', index=False)
+
+localrules:
+    parse_logs_within_target

@@ -4,7 +4,7 @@
 #SBATCH --partition=hpcpu,vcpu # -p
 #SBATCH --cpus-per-task=1 # -c
 #SBATCH --mem=6gb
-#SBATCH --time=1:00:00 # 5 minutes  
+#SBATCH --time=8:00:00 # 5 minutes  
  
 # Initialize conda:
 eval "$(conda shell.bash hook)"
