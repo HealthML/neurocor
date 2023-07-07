@@ -28,6 +28,12 @@ rule all:
     input:
         'results/results.tsv.gz'
 
+
+wildcard_constraints:
+    id='[A-Za-z0-9_]+',
+    annot_id='[A-Za-z0-9_\.]+'
+
+
 #################################
 # dependencies / pre-processing #
 #################################
@@ -41,6 +47,7 @@ rule install_ldsc_conda:
         "echo 'dummy rule to install ldsc conda environment'"
 
 rule download_hm3_snplist:
+    # note: this link is broken :(
     output:
         "resources/w_hm3/w_hm3.snplist"
     shell:
@@ -148,6 +155,7 @@ rule all_munge_other_sumstats:
 
 
 rule download_ld_scores:
+    # note: this link is broken :(
     output:
         directory('resources/eur_w_ld_chr')
     shell:
@@ -179,6 +187,7 @@ localrules:
 
 
 rule download_baseline_ld:
+    # note: these links are broken :(
     output:
         baseline=expand("1000G_EUR_Phase3_baseline/baseline.{chrom}.{suffix}", chrom=range(1,23), suffix=["annot.gz","l2.M", "l2.M_5_50", "l2.ldscore.gz"]),
         weights=expand("weights_hm3_no_hla/weights.{chrom}.l2.ldscore.gz", chrom=range(1,23)),
@@ -189,8 +198,30 @@ rule download_baseline_ld:
         "tar -xvzf 1000G_Phase3_baseline_ldscores.tgz && "
         "tar -xvzf weights_hm3_no_hla.tgz "
 
+    
+rule extract_baseline_hm3_snps:
+    input:
+        expand("1000G_EUR_Phase3_baseline/baseline.{chrom}.l2.ldscore.gz", chrom=range(1,23))
+    output:
+        expand("1000G_EUR_Phase3_baseline/hm3_{chrom}.snps", chrom=range(1,23))
+    shell:
+        'for file in 1000G_EUR_Phase3_baseline/baseline*ldscore.gz; do '
+        'chrom="$(basename $file)"; '
+        'chrom="${{chrom#baseline.}}"; '
+        'chrom="${{chrom%.l2.ldscore.gz}}"; '
+        'zcat $file | awk \'{{if(NR>1){{print $2}}}}\' > "1000G_EUR_Phase3_baseline/hm3_${{chrom}}.snps"; '
+        'done'
+
+localrules:
+    extract_baseline_hm3_snps
+
+
+#######################################
+# S-LDSC with pre-defined annotations #
+#######################################
 
 rule download_ldsc_cts:
+    # note: this link is broken :(
     output:
         ok=touch("download_{cts_name}.ok"),
         ldcts="{cts_name}.ldcts"
@@ -203,7 +234,6 @@ rule download_ldsc_cts:
 localrules:
     download_ldsc_cts,
     download_baseline_ld
-
 
 rule run_ldsc_cts:
     input:
@@ -224,6 +254,118 @@ rule run_ldsc_cts:
         "--out results/ldsc_cts/{wildcards[id]}/{wildcards[cts_name]} "
         "--ref-ld-chr-cts {input[ldcts]} "
         "--w-ld-chr weights_hm3_no_hla/weights."
+
+
+rule all_run_ldsc_cts:
+    input:
+        expand(rules.run_ldsc_cts.output, id=sumstats.index.tolist(), allow_missing=True)
+    output:
+        touch('results/ldsc_cts/{cts_name}.all_ok')
+
+
+rule run_ldsc_cts_other:
+    input:
+        sumstats="results/munged_other_sumstats/{id}.sumstats.gz",
+        ldcts="{cts_name}.ldcts"
+    output:
+        ok=touch('results/ldsc_cts_other/{id}/{cts_name}.ok')
+    conda:
+        "env/ldsc.yml"
+    resources:
+        threads=1,
+        mem_mb=8000,
+        time="02:30:00"
+    shell:
+        "ldsc/ldsc.py "
+        "--h2-cts {input[sumstats]} "
+        "--ref-ld-chr 1000G_EUR_Phase3_baseline/baseline. "
+        "--out results/ldsc_cts_other/{wildcards[id]}/{wildcards[cts_name]} "
+        "--ref-ld-chr-cts {input[ldcts]} "
+        "--w-ld-chr weights_hm3_no_hla/weights."
+
+rule all_run_ldsc_cts_other:
+    input:
+        expand(rules.run_ldsc_cts_other.output, id=other_sumstats.index.tolist(), allow_missing=True)
+    output:
+        touch('results/ldsc_cts_other/{cts_name}.all_ok')
+
+#################################################
+# S-LDSC with custom annotations from BED-files #
+#################################################
+
+# annot files should be generated with respect to the plink files in 1000G_EUR_Phase3_plink
+# these were downloaded from https://doi.org/10.5281/zenodo.7768714
+
+rule generate_annot_file_from_bed:
+    input:
+        bim=expand('1000G_EUR_Phase3_plink/1000G.EUR.QC.{chrom}.bim', chrom=range(1,23)),
+        bed='annot_bed/{annot_group}/{annot_id}.bed'
+    output:
+        annot=expand("results/annot/{{annot_group}}/{{annot_id}}_chr{chrom}.annot", chrom=range(1,23))
+    conda:
+        'env/ldsc.yml'
+    resources:
+        threads=1,
+        mem_mb=8000,
+        time="01:00:00"
+    shell:
+        'for chrom in {{1..22}}; do '
+        'python ldsc/make_annot.py '
+        '--bed-file {input[bed]} '
+        '--bimfile 1000G_EUR_Phase3_plink/1000G.EUR.QC.${{chrom}}.bim '
+        '--annot-file results/annot/{wildcards[annot_group]}/{wildcards[annot_id]}_chr${{chrom}}.annot; '
+        'done '
+
+
+rule calculate_ld_scores_annot:
+    input:
+        bed=expand("1000G_EUR_Phase3_plink/1000G.EUR.QC.{chrom}.bed", chrom=range(1,23)),
+        bim=expand("1000G_EUR_Phase3_plink/1000G.EUR.QC.{chrom}.bim", chrom=range(1,23)),
+        fam=expand("1000G_EUR_Phase3_plink/1000G.EUR.QC.{chrom}.fam", chrom=range(1,23)),
+        annot=expand("results/annot/{{annot_group}}/{{annot_id}}_chr{chrom}.annot", chrom=range(1,23)),
+        snps=expand("1000G_EUR_Phase3_baseline/hm3_{chrom}.snps", chrom=range(1,23))
+    output:
+        ldscore=expand("results/annot/{{annot_group}}/{{annot_id}}_chr{chrom}.l2.ldscore.gz", chrom=range(1,23)),
+        M=expand("results/annot/{{annot_group}}/{{annot_id}}_chr{chrom}.l2.M", chrom=range(1,23)),
+        M_5_50=expand("results/annot/{{annot_group}}/{{annot_id}}_chr{chrom}.l2.M_5_50", chrom=range(1,23)),
+        ldsc_log=expand("results/annot/{{annot_group}}/{{annot_id}}_chr{chrom}.log", chrom=range(1,23))
+    conda:
+        'env/ldsc.yml'
+    log:
+        "logs/calculate_ld_scores_annot/{annot_group}/{annot_id}.log"
+    resources:
+        threads=1,
+        mem_mb=8000,
+        time="03:30:00"
+    shell:
+        '('
+        'for chrom in {{1..22}}; do '
+        'python ldsc/ldsc.py '
+        '--bfile "1000G_EUR_Phase3_plink/1000G.EUR.QC.${{chrom}}" '
+        '--ld-wind-cm 1 '
+        '--annot "results/annot/{wildcards[annot_group]}/{wildcards[annot_id]}_chr${{chrom}}.annot" '
+        '--thin-annot '
+        '--out results/annot/{wildcards[annot_group]}/{wildcards[annot_id]}_chr${{chrom}} '
+        '--print-snps "1000G_EUR_Phase3_baseline/hm3_${{chrom}}.snps"; '
+        'done '
+        ') &> {log} '
+
+
+def get_ld_scores_from_bed_annot(wildcards):
+    # input function for the rule below
+    infiles = glob('annot_bed/{}/*.bed'.format(wildcards['annot_group']))
+    annot_ids = [ (s.split('/')[-1]).replace('.bed','') for s in infiles ]
+    return expand("results/annot/{annot_group}/{annot_id}_chr{chrom}.l2.ldscore.gz", annot_group=wildcards['annot_group'], annot_id=annot_ids, chrom=range(1,23))
+
+
+rule all_calculate_ld_scores_from_bed_annot:
+    input:
+        get_ld_scores_from_bed_annot
+    output:
+        touch('results/annot/{annot_group}/all.ok')
+
+# the rules run_ldsc_cts and run_ldsc_cts_other above can be used to run ldsc for these annotations
+# an appropriate .ldcts-file needs to be created.
 
 
 ################
