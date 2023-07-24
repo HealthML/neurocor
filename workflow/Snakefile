@@ -296,6 +296,48 @@ rule all_run_ldsc_cts_other:
 # annot files should be generated with respect to the plink files in 1000G_EUR_Phase3_plink
 # these were downloaded from https://doi.org/10.5281/zenodo.7768714
 
+rule make_1000G_EUR_Phase3_vcf:
+    input:
+        bim = expand('1000G_EUR_Phase3_plink/1000G.EUR.QC.{chrom}.bim', chrom=range(1,23)),
+        fam = '1000G_EUR_Phase3_plink/1000G.EUR.QC.1.fam',
+        plink2 = ancient(config['plink2'])
+    output:
+        vcf = expand('1000G_EUR_Phase3_plink/1000G.EUR.QC.{chrom}.variants.vcf.gz', chrom=range(1,23))
+    log:
+        'logs/make_1000G_EUR_Phase3_vcf.log'
+    shell:
+         "("
+         "head -n 1 {input.fam}  > 1000G_EUR_Phase3_plink/tmp_fam.txt; "
+         "for chrom in {{1..22}}; do "
+         "{input.plink2} --memory 1000 --bfile 1000G_EUR_Phase3_plink/1000G.EUR.QC.${{chrom}} --export vcf-4.2 id-paste=iid bgz --keep-fam 1000G_EUR_Phase3_plink/tmp_fam.txt "
+         "--out 1000G_EUR_Phase3_plink/1000G.EUR.QC.${{chrom}}.variants ; "
+         "done; "
+         "rm 1000G_EUR_Phase3_plink/tmp_fam.txt; "
+         ") &> {log}"
+    
+
+
+rule bim_to_vcf:
+     # converts the bim file(s) to VCF format, which is needed for most variant effect prediction steps
+     # there should be a better way to do this but the plink documentation is so bad I can't figure it out.
+     input:
+         bim = 'data/genotypes/{id}.bim',
+         fam = 'data/genotypes/{id}.fam',
+         plink2 = 'bin/plink2'
+     output:
+         vcf = 'work/variant_effect_prediction/vcf/{id}.vcf.gz'
+     params:
+         in_prefix = lambda wc, input: input.bim.replace('.bim',''),
+         out_prefix = lambda wc, output: output.vcf.replace('.vcf.gz','')
+     log:
+         'logs/setup/bim_to_vcf_{id}.log'
+     shell:
+         "("
+         "head -n 1 {input.fam} | cut -f1 > {params.out_prefix}_tmp_fam.txt; "
+         "{input.plink2} --memory 1000 --bfile {params.in_prefix} --export vcf-4.2 id-paste=iid bgz --keep-fam {params.out_prefix}_tmp_fam.txt "
+         "--out {params.out_prefix} && rm {params.out_prefix}_tmp_fam.txt "
+         ") &> {log}"
+
 rule generate_annot_file_from_bed:
     input:
         bim=expand('1000G_EUR_Phase3_plink/1000G.EUR.QC.{chrom}.bim', chrom=range(1,23)),
